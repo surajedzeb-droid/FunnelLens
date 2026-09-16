@@ -438,8 +438,8 @@ The web page is organised like this:
 
 | Phase | Status | Notes |
 |---|---|---|
-| 0. Setup and Logic Discovery | Not started | |
-| 1. LeadSquared API Client | Not started | |
+| 0. Setup and Logic Discovery | Done | Folder structure, requirements.txt, .gitignore, .env.example, config/config.yaml, config/presets.yaml created. docs/LOGIC_SPEC.md extracted from reference/apps_script.gs (2185 lines), covering every endpoint, field, all 8 report tabs, excluded owners, stage list, and overdue definitions, each cited to its source function. 15 open questions raised — see Open issues below and docs/LOGIC_SPEC.md "Open Questions". |
+| 1. LeadSquared API Client | Done | funnellens/settings.py (.env + Streamlit secrets + config.yaml loader), funnellens/timeutil.py (IST/UTC conversion, day windows, month bounds), funnellens/lsq_client.py (LSQClient: auth, retry with back-off, full pagination with RecordLimitError instead of silent truncation, ThreadPoolExecutor parallel helper, one method per LOGIC_SPEC.md endpoint, secret masking) built. Minimal cli.py with test-connection added. 22 tests in tests/ (timeutil, lsq_client, settings) all pass. `python cli.py test-connection` succeeds against the real API. |
 | 2. Data Extraction and Cache | Not started | |
 | 3. Filtering Engine | Not started | |
 | 4. Report Builders | Not started | |
@@ -458,7 +458,13 @@ The web page is organised like this:
 | 2026-09 | Date logic matches the Google Sheet exactly | Output must be comparable with the Sheet |
 | 2026-09 | Pull once, compute all reports locally | Consistency, speed, easy new reports |
 | 2026-09 | Stage history: label now, add snapshots later | LSQ only returns the current stage |
+| 2026-09-16 | Field schema (Source, Course, Stage, Enrolled Date, owner) filled into config.yaml from reference/apps_script.gs CONFIG constant, not guessed | Script comments explicitly mark these as "confirmed" against the live LeadSquared account |
+| 2026-09-16 | config.yaml's stage list corrected to the real 15-value CONFIG.STAGES array; "Lost" removed from stages and modeled as opportunity_status instead | README's original placeholder stage list (Cold/Warm/Hot/Enrolled/Lost/Not Reachable) doesn't match production; Lost is an Opportunity Status value, not a Stage value |
+| 2026-09-16 | All 15 Phase 0 open questions resolved by the owner; FunnelLens replicates the Apps Script's behavior/formulas exactly wherever a choice existed (column order, NR Yesterday % denominator, live-snapshot Overdues, no Total rows on Final Count/Source Wise Enrolment, 500-task and 100k/4k record caps) | Verification against the Google Sheet (README goal 1) requires matching its exact output, not a "corrected" version of it; FunnelLens still raises errors instead of silently truncating per Rule 9 |
+| 2026-09-16 | LSQClient accepts LSQ_API_HOST as either a bare host or a full https:// URL, instead of enforcing the bare-host decision from Phase 0 | The project's real .env (created independently by the owner) already held the full URL; testing against it found the bare-host assumption would have broken test-connection. Accepting both is a one-line fix with no downside. |
+| 2026-09-16 | requirements.txt pins pyarrow, which fails to build from source on Python 3.14 (no prebuilt wheel yet); tzdata added as a Windows-only dependency since zoneinfo has no system tz database there | Discovered while installing Phase 1 dependencies. Doesn't block Phase 1 (pyarrow is only needed starting Phase 2's parquet cache) but the project's Python version may need pinning to <3.14 before Phase 2, or wait for pyarrow wheels to catch up. |
 
 ### Open issues
 
-- None yet.
+- All 15 Phase 0 open questions were answered by the project owner on 2026-09-16 — see `docs/LOGIC_SPEC.md` → "Resolved Decisions" for the full list, rationale, and citations. Key outcomes: the Apps Script's 500-task pagination cap and 100,000/4,000-record search caps are accepted as-is, but FunnelLens raises an error (never truncates silently) when a cap is hit; Stage Wise/Master Data column order and Reports' "NR Yesterday %" formula are replicated exactly as coded, for verification against the Sheet; no Total rows are added to Final Count or Source Wise Enrolment. Note: `LSQ_API_HOST`'s format decision (bare host) was superseded during Phase 1 — see the decision log below.
+- `requirements.txt` pins `pyarrow`, which currently fails to build on Python 3.14 (discovered during Phase 1 dependency install). Not a blocker yet (pyarrow is first needed in Phase 2's parquet cache), but needs a decision before Phase 2: pin the project to an older Python, or wait for pyarrow wheel support.

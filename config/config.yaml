@@ -1,0 +1,54 @@
+# FunnelLens settings. All LeadSquared field names live here, never hard-coded in Python.
+# Source: reference/apps_script.gs CONFIG constant + docs/LOGIC_SPEC.md.
+# All prior open questions were resolved by the project owner on 2026-09-16 —
+# see docs/LOGIC_SPEC.md "Resolved Decisions" for the full list and rationale.
+
+timezone: Asia/Kolkata   # confirmed by owner: the Apps Script project's timezone is Asia/Kolkata (IST)
+
+fields:
+  lead_id: ProspectID
+  owner_id: OwnerId              # GUID, not searchable by name directly
+  owner_name: OwnerIdName        # display name used for all counselor grouping/filtering (LOGIC_SPEC.md section 2)
+  created_on: CreatedOn
+  modified_on: ModifiedOn
+  source: Source
+  course: mx_Enquired_Course     # "Program", mapped to "Enquired Course" (LOGIC_SPEC.md section 2)
+  opportunity_stage: mx_Custom_2       # lives on the OPPORTUNITY, not the Lead (LOGIC_SPEC.md section 2)
+  opportunity_status: Status           # Open / Lost / Won, also on the Opportunity (LOGIC_SPEC.md section 2)
+  enrolled_date: mx_Custom_45          # on the Opportunity (LOGIC_SPEC.md section 2)
+  task_due_date: DueDate
+  task_status: Status                  # Task's own Status field: 'Pending' / 'Completed'
+
+# Exact order matters: this is the Stage Wise / Master Data column order (LOGIC_SPEC.md section 5).
+# NOT pipeline order (Cold->Warm->Hot->Enrolled) -- copied verbatim from CONFIG.STAGES.
+# "Lost" is not a stage; it is opportunity_status = "Lost" (confirmed by owner).
+stages:
+  - Budget Issue
+  - Cold
+  - Connected
+  - Disqualified
+  - Enrolled
+  - Future Prospect
+  - Hot
+  - Interested
+  - Language Barrier
+  - Lost to Competitor
+  - New
+  - Not Reachable
+  - Offline in another city
+  - Reachable
+  - Warm
+
+# Applied in getActiveCounselors() (LOGIC_SPEC.md section 4).
+excluded_owner_roles: [Administrator, Marketing_User]
+excluded_owner_names: [Prabhjeet Nanda, Tarun Sharma, BDM edZeb]
+
+opportunity_event_code: 12000   # required by Opportunity Advanced Search; owner confirmed stable, kept hardcoded
+
+api:
+  page_size: 1000            # confirmed max page size used by lsqSearchAllPages (LeadManagement.svc/Leads.Get)
+  opportunity_search_page_size: 200   # confirmed page size used by searchOpportunitiesByEnrolledDate
+  max_records: 100000         # matches lsqSearchAllPages' 100-page x 1000 safety cap; owner confirmed correct. Hitting it MUST raise an error (README Rule 9), unlike the Apps Script which only logs a warning.
+  max_opportunity_search_records: 4000   # matches searchOpportunitiesByEnrolledDate's 20-page x 200 safety cap; owner confirmed correct. Same "raise, don't truncate" rule applies.
+  max_workers: 5             # FunnelLens-specific default (README section 4.2's own example value). apps_script.gs has no equivalent config -- it batches UrlFetchApp.fetchAll calls in fixed groups of 20 with a 1s pause between batches (batchUrlFetch), a different parallelism model not directly portable to a thread-pool max_workers count.
+  retry_attempts: 5          # FunnelLens-specific default (README section 4.2's own example value). apps_script.gs has no retry/back-off logic at all -- it treats a non-200 response as an immediate failure (see e.g. getOverdueTaskCounts, searchOpportunitiesByEnrolledDate).

@@ -1,0 +1,9 @@
+presets: []
+
+# Example (uncomment and edit once the team confirms their most-used filters):
+# presets:
+#   - name: "Team North - ACCA Hot Leads"
+#     rules:
+#       - {field: owner, op: in, value: ["Counselor A", "Counselor B"]}
+#       - {field: course, op: in, value: ["ACCA"]}
+#       - {field: stage, op: equals, value: "Hot"}
