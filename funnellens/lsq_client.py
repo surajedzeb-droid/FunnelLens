@@ -47,10 +47,7 @@ class LSQClient:
         self._settings = settings
         self._session = session or requests.Session()
         host = settings.secrets.api_host
-        if host.startswith("http://") or host.startswith("https://"):
-            self._base_url = host.rstrip("/")
-        else:
-            self._base_url = f"https://{host}"
+        self._base_url = host.rstrip("/") if host.startswith(("http://", "https://")) else f"https://{host}"
         self._retry_attempts = settings.api.get("retry_attempts", 5)
         self._max_workers = settings.api.get("max_workers", 5)
         self._page_size = settings.api["page_size"]
