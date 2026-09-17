@@ -3,7 +3,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from funnellens.lsq_client import LSQClient, LSQTransientError, RecordLimitError, mask_secrets
+from funnellens.lsq_client import LSQClient, LSQRateLimitError, LSQTransientError, RecordLimitError, mask_secrets
 from funnellens.settings import Secrets, Settings
 
 
@@ -36,10 +36,11 @@ def make_settings(**api_overrides) -> Settings:
     )
 
 
-def make_response(status_code: int, json_body=None, text: str = ""):
+def make_response(status_code: int, json_body=None, text: str = "", headers=None):
     resp = MagicMock()
     resp.status_code = status_code
     resp.text = text or str(json_body)
+    resp.headers = headers or {}
     resp.json.return_value = json_body
     return resp
 
@@ -82,7 +83,7 @@ def test_pagination_raises_record_limit_error_instead_of_truncating():
 
 
 def test_retry_on_429_then_success():
-    client = LSQClient(make_settings(retry_attempts=3))
+    client = LSQClient(make_settings(retry_attempts=3, rate_limit_window_seconds=0.01))
     with patch.object(client, "_session") as mock_session:
         mock_session.request.side_effect = [
             make_response(429, text="rate limited"),
@@ -90,6 +91,27 @@ def test_retry_on_429_then_success():
         ]
         result = client.get_users()
     assert result == [{"ID": "u1", "StatusCode": 0}]
+    assert mock_session.request.call_count == 2
+
+
+def test_429_retry_after_is_respected():
+    client = LSQClient(make_settings(retry_attempts=2))
+    with patch.object(client, "_session") as mock_session:
+        mock_session.request.side_effect = [
+            make_response(429, text="rate limited", headers={"Retry-After": "0.05"}),
+            make_response(200, json_body=[]),
+        ]
+        start = time.monotonic()
+        assert client.get_users() == []
+    assert time.monotonic() - start >= 0.045
+
+
+def test_permanent_429_raises_clear_rate_limit_error():
+    client = LSQClient(make_settings(retry_attempts=2))
+    with patch.object(client, "_session") as mock_session:
+        mock_session.request.return_value = make_response(429, text="rate limited", headers={"Retry-After": "0"})
+        with pytest.raises(LSQRateLimitError, match="rate limit"):
+            client.get_users()
     assert mock_session.request.call_count == 2
 
 
@@ -139,8 +161,8 @@ def test_run_parallel_preserves_input_order():
 
 def test_throttle_delays_once_the_window_is_full():
     client = LSQClient(make_settings())
-    client._RATE_LIMIT_CALLS = 2
-    client._RATE_LIMIT_WINDOW = 0.2
+    client._rate_limit_calls = 2
+    client._rate_limit_window = 0.2
     start = time.monotonic()
     for _ in range(3):
         client._throttle()
@@ -149,8 +171,24 @@ def test_throttle_delays_once_the_window_is_full():
 
 def test_throttle_does_not_delay_under_the_limit():
     client = LSQClient(make_settings())
-    client._RATE_LIMIT_CALLS = 100
+    client._rate_limit_calls = 100
     start = time.monotonic()
     for _ in range(5):
         client._throttle()
     assert time.monotonic() - start < 0.1
+
+
+def test_parallel_workers_share_one_rate_limit_budget():
+    client = LSQClient(make_settings(max_workers=4, rate_limit_requests=2, rate_limit_window_seconds=0.1))
+    request_times = []
+
+    def request(*args, **kwargs):
+        request_times.append(time.monotonic())
+        return make_response(200, json_body=[])
+
+    with patch.object(client, "_session") as mock_session:
+        mock_session.request.side_effect = request
+        assert client.run_parallel([client.get_users] * 4) == [[], [], [], []]
+
+    assert len(request_times) == 4
+    assert sorted(request_times)[2] - sorted(request_times)[0] >= 0.09

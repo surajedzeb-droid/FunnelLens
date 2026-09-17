@@ -213,6 +213,25 @@ def get_preset(name: str, path: Path | None = None) -> Preset:
     raise FilterError(f"No preset named {name!r} found in {path or PRESETS_PATH}")
 
 
+def save_preset(name: str, rules: list[Rule], path: Path | None = None) -> None:
+    """Appends a new preset to presets.yaml. Raises FilterError for a blank name or one that
+    already exists (case-insensitive)."""
+    path = path or PRESETS_PATH
+    name = name.strip()
+    if not name:
+        raise FilterError("Preset name can't be blank.")
+    existing = load_presets(path)
+    if any(p.name.strip().lower() == name.lower() for p in existing):
+        raise FilterError(f"A preset named {name!r} already exists.")
+
+    with open(path, "r", encoding="utf-8") as f:
+        raw = yaml.safe_load(f) or {}
+    raw.setdefault("presets", [])
+    raw["presets"].append({"name": name, "rules": [{"field": r.field, "op": r.op, "value": r.value} for r in rules]})
+    with open(path, "w", encoding="utf-8") as f:
+        yaml.safe_dump(raw, f, sort_keys=False, allow_unicode=True)
+
+
 def available_values(dataset: Dataset, field: str) -> list[str]:
     """Sorted, deduplicated display values for `field` across every Dataset frame that has it -- for UI dropdowns."""
     values: set[str] = set()

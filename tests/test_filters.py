@@ -11,6 +11,7 @@ from funnellens.filters import (
     get_preset,
     load_presets,
     parse_filter_string,
+    save_preset,
 )
 
 
@@ -238,6 +239,28 @@ def test_get_preset_raises_for_missing_name(tmp_path):
     path.write_text("presets: []\n", encoding="utf-8")
     with pytest.raises(FilterError):
         get_preset("Does Not Exist", path)
+
+
+def test_save_preset_then_load_round_trips(tmp_path):
+    path = tmp_path / "presets.yaml"
+    path.write_text("presets: []\n", encoding="utf-8")
+    save_preset("Hot ACCA", [Rule("course", "equals", "ACCA")], path)
+    preset = get_preset("Hot ACCA", path)
+    assert preset.rules[0].value == "ACCA"
+
+
+def test_save_preset_rejects_blank_name(tmp_path):
+    path = tmp_path / "presets.yaml"
+    path.write_text("presets: []\n", encoding="utf-8")
+    with pytest.raises(FilterError, match="blank"):
+        save_preset("  ", [], path)
+
+
+def test_save_preset_rejects_duplicate_name_case_insensitive(tmp_path):
+    path = tmp_path / "presets.yaml"
+    path.write_text("presets:\n  - name: Hot ACCA\n    rules: []\n", encoding="utf-8")
+    with pytest.raises(FilterError, match="already exists"):
+        save_preset("hot acca", [], path)
 
 
 # ---- available_values ----------------------------------------------------------

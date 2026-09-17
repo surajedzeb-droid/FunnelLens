@@ -25,6 +25,7 @@ from openpyxl.worksheet.worksheet import Worksheet
 
 from funnellens.checks import run_checks
 from funnellens.reports import ReportResult
+from funnellens.timeutil import IST
 
 OUTPUT_DIR = Path(__file__).resolve().parent.parent / "output"
 
@@ -113,7 +114,9 @@ def _write_run_info_sheet(wb: Workbook, run_info: dict, stage_labels: dict[str, 
         elif isinstance(value, (list, tuple, set)):
             value = ", ".join(str(v) for v in value)
         elif getattr(value, "tzinfo", None) is not None:
-            value = value.isoformat()  # Excel rejects tz-aware datetimes
+            # README section 9: generated-at time is recorded in IST. Excel also rejects
+            # tz-aware datetimes outright, so convert then isoformat rather than just stripping.
+            value = value.astimezone(IST).isoformat()
         ws.cell(row=row_idx, column=2, value=value)
         row_idx += 1
     ws.column_dimensions["A"].width = 28

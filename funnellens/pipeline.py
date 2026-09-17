@@ -1,7 +1,15 @@
 """The core pipeline: fetch_dataset -> normalize -> filter -> build reports -> run checks
--> write the workbook. cli.py's `generate` command and Phase 7's web app both call
-run_pipeline() so they can never disagree about what a "run" does (Phase 6 prompt rule:
-"The CLI and the future web app must share the same pipeline code")."""
+-> write the workbook. cli.py's `generate` command and app.py's web UI both build on this
+module so they can never disagree about what a "run" does (Phase 6 prompt rule: "The CLI
+and the future web app must share the same pipeline code").
+
+Split into two steps because the web app needs them separately (README Section 8.1/8.2:
+fetch once, then filter/re-filter locally with no new API calls):
+- fetch_and_normalize(): the only step that talks to LeadSquared.
+- build_workbook(): filter -> reports -> checks -> export, a pure function of an
+  already-fetched Dataset -- callable as many times as the user changes filters.
+run_pipeline() is both steps back to back, for the CLI's one-shot `generate` command.
+"""
 
 from __future__ import annotations
 
@@ -12,12 +20,12 @@ from typing import Callable
 
 from funnellens.checks import run_checks
 from funnellens.export import OUTPUT_DIR, write_workbook
-from funnellens.extract import fetch_dataset
+from funnellens.extract import Dataset, fetch_dataset
 from funnellens.filters import Rule, apply_to_dataset, get_preset
 from funnellens.lsq_client import LSQClient
 from funnellens.normalize import normalize_dataset
-from funnellens.reports import REGISTRY, ReportContext
-from funnellens.settings import load_settings
+from funnellens.reports import REGISTRY, ReportContext, ReportResult
+from funnellens.settings import Settings, load_settings
 
 ProgressCallback = Callable[[str, int, int], None]
 
@@ -40,20 +48,24 @@ class PipelineOptions:
     out_path: str | Path | None = None
 
 
-def run_pipeline(options: PipelineOptions, progress_callback: ProgressCallback | None = None) -> tuple[bytes, dict]:
-    if options.to_date < options.from_date:
-        raise PipelineError(f"to_date ({options.to_date}) is before from_date ({options.from_date})")
+def fetch_and_normalize(from_date: date, to_date: date, settings: Settings, client: LSQClient,
+                         owners: list[str] | None = None, progress_callback: ProgressCallback | None = None,
+                         force_refresh: bool = False) -> Dataset:
+    if to_date < from_date:
+        raise PipelineError(f"to_date ({to_date}) is before from_date ({from_date})")
+    dataset = fetch_dataset(from_date, to_date, settings, client=client, owners=owners,
+                             progress_callback=progress_callback, force_refresh=force_refresh)
+    return normalize_dataset(dataset, settings)
+
+
+def build_report_results(dataset: Dataset, options: PipelineOptions, settings: Settings,
+                          client: LSQClient) -> tuple[list[ReportResult], dict]:
+    """Filter -> reports -> checks, without exporting. Shared by build_workbook() (which also
+    writes the file, for the CLI) and app.py (which additionally needs the ReportResults
+    themselves for its preview tabs, so it must not build them a second time to export)."""
     unknown = [k for k in options.report_keys if k not in REGISTRY]
     if unknown:
-        raise PipelineError(f"Unknown report key(s): {', '.join(unknown)}. "
-                             f"Valid keys: {', '.join(REGISTRY)}")
-
-    settings = load_settings()
-    client = LSQClient(settings)
-    dataset = fetch_dataset(options.from_date, options.to_date, settings, client=client,
-                             owners=options.owners, progress_callback=progress_callback,
-                             force_refresh=options.force_refresh)
-    dataset = normalize_dataset(dataset, settings)
+        raise PipelineError(f"Unknown report key(s): {', '.join(unknown)}. Valid keys: {', '.join(REGISTRY)}")
 
     rules = list(options.filters)
     if options.preset:
@@ -78,7 +90,24 @@ def run_pipeline(options: PipelineOptions, progress_callback: ProgressCallback |
         "row_counts": {name: len(getattr(filtered, name)) for name in
                        ("leads_created", "leads_modified", "opportunities", "enrolments", "tasks", "users")},
     }
-    out_path = Path(options.out_path) if options.out_path else OUTPUT_DIR / f"FunnelLens_{options.from_date}_to_{options.to_date}.xlsx"
+    return results, run_info
+
+
+def build_workbook(dataset: Dataset, options: PipelineOptions, settings: Settings, client: LSQClient) -> tuple[bytes, dict]:
+    """build_report_results(), then write_workbook(). Makes no API calls except
+    final_count.py's live Overdues snapshot (one call per active counselor, via `client`)."""
+    results, run_info = build_report_results(dataset, options, settings, client)
+    out_path = (Path(options.out_path) if options.out_path
+                else OUTPUT_DIR / f"FunnelLens_{options.from_date}_to_{options.to_date}.xlsx")
     data = write_workbook(results, run_info, path=out_path)
     run_info["output_path"] = str(out_path)
     return data, run_info
+
+
+def run_pipeline(options: PipelineOptions, progress_callback: ProgressCallback | None = None) -> tuple[bytes, dict]:
+    settings = load_settings()
+    client = LSQClient(settings)
+    dataset = fetch_and_normalize(options.from_date, options.to_date, settings, client,
+                                   owners=options.owners, progress_callback=progress_callback,
+                                   force_refresh=options.force_refresh)
+    return build_workbook(dataset, options, settings, client)

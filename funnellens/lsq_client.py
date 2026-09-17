@@ -9,16 +9,18 @@ endpoint or field name.
 from __future__ import annotations
 
 import logging
+import random
 import re
 import threading
 import time
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+from email.utils import parsedate_to_datetime
 from typing import Any, Callable
 
 import requests
-from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_exception_type, stop_after_attempt
 
 from funnellens.settings import Settings
 from funnellens.timeutil import from_lsq_utc_string, to_lsq_utc_string
@@ -41,6 +43,14 @@ class LSQTransientError(LSQError):
     """Raised for HTTP 429/5xx responses -- retried by tenacity."""
 
 
+class LSQRateLimitError(LSQTransientError):
+    """Raised for HTTP 429 responses, retaining the server's requested retry delay."""
+
+    def __init__(self, message: str, retry_after: float | None = None):
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
 class RecordLimitError(LSQError):
     """Raised instead of silently truncating when a search would exceed the configured record cap (README Rule 9)."""
 
@@ -57,27 +67,55 @@ class LSQClient:
         host = settings.secrets.api_host
         self._base_url = host.rstrip("/") if host.startswith(("http://", "https://")) else f"https://{host}"
         self._retry_attempts = settings.api.get("retry_attempts", 5)
+        self._rate_limit_calls = settings.api.get("rate_limit_requests", self._RATE_LIMIT_CALLS)
+        self._rate_limit_window = settings.api.get("rate_limit_window_seconds", self._RATE_LIMIT_WINDOW)
         self._max_workers = settings.api.get("max_workers", 5)
         self._page_size = settings.api["page_size"]
         self._opp_page_size = settings.api["opportunity_search_page_size"]
         self._max_records = settings.api["max_records"]
         self._max_opp_records = settings.api["max_opportunity_search_records"]
         self.call_count = 0
-        self._rate_lock = threading.Lock()
+        self._rate_condition = threading.Condition()
         self._call_times: deque[float] = deque()
+        self._rate_limited_until = 0.0
 
     def _throttle(self) -> None:
         """Blocks until fewer than _RATE_LIMIT_CALLS calls have been made in the trailing window,
         shared across every thread using this client -- caps real request rate, not just retries."""
-        with self._rate_lock:
+        with self._rate_condition:
             while True:
                 now = time.monotonic()
-                while self._call_times and now - self._call_times[0] > self._RATE_LIMIT_WINDOW:
+                while self._call_times and now - self._call_times[0] >= self._rate_limit_window:
                     self._call_times.popleft()
-                if len(self._call_times) < self._RATE_LIMIT_CALLS:
+                if now < self._rate_limited_until:
+                    wait_for = self._rate_limited_until - now
+                elif len(self._call_times) < self._rate_limit_calls:
                     self._call_times.append(now)
                     return
-                time.sleep(self._RATE_LIMIT_WINDOW - (now - self._call_times[0]))
+                else:
+                    wait_for = self._rate_limit_window - (now - self._call_times[0])
+                logger.info("LeadSquared rate limiter waiting %.2fs", wait_for)
+                self._rate_condition.wait(wait_for)
+
+    @staticmethod
+    def _retry_after_seconds(value: str | None) -> float | None:
+        """Parses Retry-After seconds or an HTTP date; invalid/past values fall back to jittered backoff."""
+        if not value:
+            return None
+        try:
+            return max(0.0, float(value))
+        except (TypeError, ValueError):
+            try:
+                return max(0.0, (parsedate_to_datetime(value).timestamp() - time.time()))
+            except (TypeError, ValueError, IndexError, OverflowError):
+                return None
+
+    def _pause_all_requests(self, seconds: float | None) -> None:
+        if seconds is None:
+            return
+        with self._rate_condition:
+            self._rate_limited_until = max(self._rate_limited_until, time.monotonic() + seconds)
+            self._rate_condition.notify_all()
 
     # ------------------------------------------------------------------
     # Low-level request plumbing
@@ -103,7 +141,14 @@ class LSQClient:
         except requests.exceptions.RequestException as exc:
             raise LSQTransientError(mask_secrets(f"Connection error calling {path}: {exc}")) from exc
 
-        if response.status_code == 429 or response.status_code >= 500:
+        if response.status_code == 429:
+            retry_after = self._retry_after_seconds(response.headers.get("Retry-After"))
+            self._pause_all_requests(retry_after)
+            logger.warning("LeadSquared %s returned 429; retry-after=%s", path, retry_after)
+            raise LSQRateLimitError(
+                mask_secrets(f"LeadSquared {path} returned 429 (rate limit): {response.text[:500]}"), retry_after
+            )
+        if response.status_code >= 500:
             raise LSQTransientError(
                 mask_secrets(f"LeadSquared {path} returned {response.status_code}: {response.text[:500]}")
             )
@@ -119,11 +164,26 @@ class LSQClient:
     def _call(self, method: str, path: str, *, params: dict[str, Any] | None = None,
                json_body: dict[str, Any] | None = None) -> Any:
         """Retries _request on transient errors with exponential back-off, bounded by config.retry_attempts."""
+        def retry_wait(state) -> float:
+            exc = state.outcome.exception() if state.outcome else None
+            if isinstance(exc, LSQRateLimitError) and exc.retry_after is not None:
+                wait_for = exc.retry_after
+            else:
+                # LeadSquared normally omits Retry-After. Start at one full quota
+                # window so a rejected batch can expire, then back off exponentially.
+                wait_for = min(30.0, self._rate_limit_window * 2 ** (state.attempt_number - 1)) + random.uniform(0, 1)
+            if isinstance(exc, LSQRateLimitError):
+                # A 429 is account-wide. Make every worker observe this retry's cooldown,
+                # rather than letting the rest of the pool continue into the same limit.
+                self._pause_all_requests(wait_for)
+            logger.warning("Retrying LeadSquared request (attempt %s/%s) in %.2fs", state.attempt_number,
+                           self._retry_attempts, wait_for)
+            return wait_for
 
         @retry(
             retry=retry_if_exception_type(LSQTransientError),
             stop=stop_after_attempt(self._retry_attempts),
-            wait=wait_exponential(multiplier=1, min=1, max=30),
+            wait=retry_wait,
             reraise=True,
         )
         def _do() -> Any:

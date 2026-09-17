@@ -82,3 +82,16 @@ def test_normalize_opportunities_renames_and_canonicalizes_stage():
     out = normalize_opportunities(df, make_settings())
     assert out.loc[0, "opportunity_stage"] == "hot"
     assert out.loc[0, "opportunity_status"] == "Open"
+
+
+def test_normalize_opportunities_drops_duplicate_lead_ids_keeping_the_last():
+    # A lead created on one day and modified on another gets fetched in both days'
+    # opportunity pulls (extract.py) -- every downstream .set_index("lead_id") lookup
+    # needs exactly one row per lead, or pandas returns a Series instead of a scalar.
+    df = pd.DataFrame([
+        {"lead_id": "1", "mx_Custom_2": "Cold", "Status": "Open", "mx_Custom_45": None},
+        {"lead_id": "1", "mx_Custom_2": "Hot", "Status": "Open", "mx_Custom_45": None},
+    ])
+    out = normalize_opportunities(df, make_settings())
+    assert len(out) == 1
+    assert out.iloc[0]["opportunity_stage"] == "Hot"

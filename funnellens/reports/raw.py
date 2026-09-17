@@ -34,8 +34,7 @@ def build(dataset: Dataset, from_date: date, to_date: date, context: ReportConte
     combined = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
     if not combined.empty and not opportunities.empty:
-        combined = combined.merge(opportunities.drop_duplicates("lead_id"), on="lead_id", how="left",
-                                   suffixes=("", "_opportunity"))
+        combined = combined.merge(opportunities, on="lead_id", how="left", suffixes=("", "_opportunity"))
 
     if context.mask_pii:
         for col in combined.columns:

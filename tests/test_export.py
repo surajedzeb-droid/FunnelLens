@@ -78,6 +78,19 @@ def test_stage_wise_sheet_has_stage_as_of_label(tmp_path):
     assert ws.freeze_panes == "A4"  # title + label + header
 
 
+def test_run_info_generated_at_is_shown_in_ist(tmp_path):
+    # RUN_AT fixture is 2026-09-03 04:30:00 UTC == 2026-09-03 10:00:00 IST (README section 9:
+    # Run Info's generated-at time is recorded in IST).
+    path = tmp_path / "out.xlsx"
+    write_workbook(make_results(), make_run_info(), path=path)
+    wb = openpyxl.load_workbook(path)
+    ws = wb["Run Info"]
+    row = next(r for r in range(2, ws.max_row + 1) if ws.cell(row=r, column=1).value == "generated_at")
+    value = ws.cell(row=row, column=2).value
+    assert "10:00:00" in value
+    assert "+05:30" in value
+
+
 def test_run_info_sheet_contains_given_fields(tmp_path):
     path = tmp_path / "out.xlsx"
     write_workbook(make_results(), make_run_info(), path=path)

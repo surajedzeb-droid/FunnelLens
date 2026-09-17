@@ -377,18 +377,21 @@ python cli.py list-presets       # preset names from config/presets.yaml
 streamlit run app.py
 ```
 
-The web page is organised like this:
+The web page uses a two-step flow (README section 8): **Load data** fetches once and keeps
+it in the session; everything after that (filters, report choice, Generate) is local-only,
+with no new API calls except Final Count's live Overdues snapshot.
 
 - **Sidebar:**
-  - date range picker
-  - report checkboxes
-  - Counselor, Source, Course and Stage multi-selects
-  - an Advanced rules section
+  - date range picker (default: yesterday IST) and a **Load data** button, with a Force refresh toggle
+  - report checkboxes, plus "Select all"
   - preset picker
-  - excluded-owners toggle
+  - Counselor, Source, Course and Stage multi-selects (options come from the loaded data)
+  - an Advanced rules expander (field / operator / value)
+  - Include excluded owners toggle (default off) and Mask phone/email toggle (default on)
+  - a form to save the current filters as a new preset
 - **Main area:**
   - a **Generate** button
-  - a progress bar
+  - a progress bar (during Load data)
   - report previews
   - a **Download Excel** button
 
@@ -451,7 +454,7 @@ The web page is organised like this:
 | 4. Report Builders | Done | funnellens/reports/{__init__,_shared,lead_funnel,stage_wise,source_wise,course_wise,reports_tab,final_count,source_enrolment,raw}.py + funnellens/checks.py built per LOGIC_SPEC.md section 3 exactly. Registry of 8 keys, every builder is build(dataset, from_date, to_date, context) -> ReportResult (DataFrame + an `is_total` column marking Total rows). Days newest-first with a Total row per day block; Monthly/Yesterday columns are pandas SUMIFS-equivalents over whatever calendar days are present in `dataset` (caller must pull enough history -- documented in _shared.py). Stage Wise carries a "Stage as of <run date>" label (Phase 9 hook not yet wired). checks.py implements all 6 Phase 4 consistency checks. 30 new tests (100 total) pass on a hand-built fixture with known-correct answers. Verified against real Phase 2 data (2026-09-15): all 8 reports build without error; checks.py caught a real issue -- see Open issues. |
 | 5. Excel Export | Done | funnellens/export.py: write_workbook(results, run_info, path=None) -> bytes, always saving to `path` (or the default `output/FunnelLens_<from>_to_<to>.xlsx`, from run_info's from_date/to_date). One sheet per selected report (given order) + Raw Data (pulled out of `results` by key=="raw") + Run Info (caller's run_info dict, plus stage-basis labels and checks.py's issue count computed here) + an Issues sheet only when checks.py finds any. Bold/frozen headers, bold Total rows with a light fill, `0.00"%"` format for %% columns (values are already 0-100, so the built-in `0.00%` format would double-scale them), integer format for counts, auto-sized columns. 12 new tests (112 total) pass. Real-data sample generated at output/FunnelLens_2026-09-15_to_2026-09-15.xlsx. |
 | 6. Command-Line Interface | Done | funnellens/pipeline.py: run_pipeline(options, progress_callback) -> (bytes, run_info), the shared fetch_dataset -> normalize -> filter -> build reports -> checks -> write_workbook pipeline (raises PipelineError for an unknown report key or a reversed date range; always includes the "raw" report so Raw Data appears even if not selected; run_info carries output_path, api_calls, row_counts and the checks.py issue list). cli.py: test-connection, pull, generate (--reports/--from/--to/--owner/--filter/--preset/--include-excluded-owners/--mask-pii/--force-refresh/--out), verify/snapshot stubs, list-reports, list-presets. Error handling is centralized once in main() (SettingsError/LSQError/PipelineError/FilterError/ValueError -> a one-line message and exit 1; --debug re-raises). 17 new tests (129 total) pass. Real run: `python cli.py generate --reports all --from 2026-09-15 --to 2026-09-15` wrote a 10-sheet workbook and correctly surfaced the Overdues_Total==500 issue from Phase 4 on stdout. |
-| 7. Streamlit Web App | Not started | |
+| 7. Streamlit Web App | Done | app.py: two-step flow -- "Load data" (sidebar) calls pipeline.fetch_and_normalize() once and stores the Dataset/Settings/LSQClient in st.session_state; everything else (report checkboxes, preset picker, Counselor/Source/Course/Stage multi-selects populated via filters.available_values(), an Advanced rules expander, excluded-owners/mask-PII/force-refresh toggles, a save-as-preset form) is local-only and calls pipeline.build_report_results() on Generate, with no new API calls except Final Count's live snapshot. Preview tabs per report, a Download Excel button, a friendly-error/technical-details-expander pattern, and an optional shared-password gate (APP_PASSWORD secret/env; no-op if unset). Split pipeline.py further into fetch_and_normalize() + build_report_results() + build_workbook() so app.py and cli.py share the exact same filter/report logic without recomputing reports twice for preview vs. export. 21 new tests (142 total) pass, including 8 headless functional tests using Streamlit's own AppTest harness (load data, filter dropdowns, Generate, error paths) -- no browser needed, since the available Chrome instance wasn't network-reachable from this environment. Verified against real cached data too (2026-09-15): Load Data and Generate both completed with 7 report tabs and a working download button; fixed one real cosmetic bug found this way (Total rows' blank cells confused Streamlit's Arrow table serializer). |
 | 8. Verification Against Google Sheet | Not started | |
 | 9. Stage Snapshots, Deployment and Handover | Not started | |
 
@@ -475,6 +478,10 @@ The web page is organised like this:
 | 2026-09-17 | Final Count's live Overdues snapshot (LOGIC_SPEC.md 6.1) is fetched via a live LSQClient call inside final_count.py at report-build time, not from the Phase 2 cache | Resolved Decision 5 requires this figure to reflect "now" at generation time, not a historically cached pull -- the same live-query behavior the Apps Script itself uses. ReportContext gained an optional `client` field for this one report; every other report builder is a pure function of `dataset`. Owner confirmed this approach over caching a stale per-owner snapshot in Phase 2. |
 | 2026-09-17 | Percentage columns in export.py use a custom `0.00"%"` number format instead of Excel's built-in `0.00%` | Report builders' safe_pct() already returns the percentage on a 0-100 scale (e.g. 66.7), matching every ROUND(x/y*100,1) formula in LOGIC_SPEC.md; the built-in `0.00%` format multiplies the cell value by 100 again for display, which would show "6670.00%". The custom format just appends a literal "%" without rescaling. |
 | 2026-09-17 | export.py strips tzinfo from any timezone-aware datetime cell before writing (report sheets and Run Info) | openpyxl raises `TypeError: Excel does not support timezones in datetimes` on a tz-aware value -- caught by generating a real sample workbook, since normalize.py's IST-aware datetimes (created_on, enrolled_date, etc.) flow straight into Raw Data, and run_info's generated_at is also tz-aware. |
+| 2026-09-17 | Run Info's `generated_at` is converted to IST before being written, not just stripped of tzinfo | README section 9 requires the generated-at time in IST; the tz-stripping fix above preserved whatever zone the datetime happened to be in (UTC, from `datetime.now(timezone.utc)`), which isn't what a reader expects labeled "generated_at" without a zone marker. |
+| 2026-09-17 | normalize.py's normalize_opportunities() drops duplicate lead_id rows (keeping the last) | A multi-day `generate` run crashed with "The truth value of a Series is ambiguous": extract.py fetches opportunities per created-day window, so a lead created on one day and modified on another is fetched in both days' windows, and stage_wise.py's `.set_index("lead_id")[...].get(lead_id)` returned a Series instead of a scalar once duplicates existed. Fixed once at the shared source (every report joins opportunities by lead_id) instead of patching stage_wise.py alone -- raw.py had already independently worked around the same issue with its own `drop_duplicates`, since removed as redundant. |
+| 2026-09-17 | funnellens/pipeline.py split into fetch_and_normalize() + build_report_results() + build_workbook(), with run_pipeline() as both back to back | Phase 7's two-step web UI (Load data once, then filter/Generate repeatedly with no new API calls) needed the fetch and the filter/report/export stages separately; build_report_results() is factored out further so app.py's preview tabs and its Download button use the exact same computed ReportResults instead of building reports twice. cli.py's `generate` command (run_pipeline) is unaffected. |
+| 2026-09-17 | app.py verified via Streamlit's own AppTest harness (headless, no browser) instead of a live browser session | The only connected Chrome browser was on a different machine, not network-reachable from this dev environment's localhost. AppTest actually drives the real widget tree (button clicks, session_state, reruns) rather than mocking the UI layer, so it's a faithful substitute, not a downgrade -- a live-browser check is still worth doing before hosting the app for the team. |
 
 ### Open issues
 

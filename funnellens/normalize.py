@@ -103,7 +103,12 @@ def normalize_leads(df: pd.DataFrame, settings: Settings, date_field: str, roste
 
 
 def normalize_opportunities(df: pd.DataFrame, settings: Settings) -> pd.DataFrame:
-    """Renames the Opportunity's stage/status/enrolled-date fields and case-normalizes stage."""
+    """Renames the Opportunity's stage/status/enrolled-date fields and case-normalizes stage.
+
+    extract.py fetches opportunities per created-day window, so a lead created on one day and
+    modified on another is fetched twice; every caller expects exactly one row per lead_id
+    (e.g. stage_wise.py's `.set_index("lead_id")[...].get(lead_id)`), so duplicates are
+    collapsed here once, keeping the last (most recently fetched, so closest to current)."""
     columns = ["lead_id", "opportunity_stage", "opportunity_status", "enrolled_date"]
     field_to_internal = {settings.fields["opportunity_stage"]: "opportunity_stage",
                           settings.fields["opportunity_status"]: "opportunity_status",
@@ -111,6 +116,8 @@ def normalize_opportunities(df: pd.DataFrame, settings: Settings) -> pd.DataFram
     out = _renamed_or_empty(df, field_to_internal, columns)
     if out.empty:
         return out
+    if "lead_id" in out.columns:
+        out = out.drop_duplicates(subset="lead_id", keep="last")
     if "opportunity_stage" in out.columns:
         out["opportunity_stage"] = canonicalize_column(out["opportunity_stage"])
     if "enrolled_date" in out.columns:

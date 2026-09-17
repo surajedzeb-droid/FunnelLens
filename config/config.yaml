@@ -52,3 +52,5 @@ api:
   max_opportunity_search_records: 4000   # matches searchOpportunitiesByEnrolledDate's 20-page x 200 safety cap; owner confirmed correct. Same "raise, don't truncate" rule applies.
   max_workers: 5             # FunnelLens-specific default (README section 4.2's own example value). apps_script.gs has no equivalent config -- it batches UrlFetchApp.fetchAll calls in fixed groups of 20 with a 1s pause between batches (batchUrlFetch), a different parallelism model not directly portable to a thread-pool max_workers count.
   retry_attempts: 5          # FunnelLens-specific default (README section 4.2's own example value). apps_script.gs has no retry/back-off logic at all -- it treats a non-200 response as an immediate failure (see e.g. getOverdueTaskCounts, searchOpportunitiesByEnrolledDate).
+  rate_limit_requests: 18   # below LeadSquared's 20 API calls / 5 seconds account-wide limit
+  rate_limit_window_seconds: 5
