@@ -358,12 +358,18 @@ python cli.py test-connection
 ### 11.2 Command line
 
 ```bash
+python cli.py test-connection
+python cli.py pull --from 2026-09-01 --to 2026-09-15
 python cli.py generate --reports stage course final --from 2026-09-01 --to 2026-09-15
 python cli.py generate --reports all --from 2026-09-01 --to 2026-09-15 --preset "Team North – ACCA Hot Leads"
 python cli.py generate --reports stage --from 2026-09-10 --to 2026-09-10 --filter "course in ACCA,CMA"
 python cli.py verify --sheet exports/LSQ_Sheet_Sep.xlsx --from 2026-09-01 --to 2026-09-15
 python cli.py snapshot           # save today's stage snapshot
+python cli.py list-reports       # report keys accepted by --reports
+python cli.py list-presets       # preset names from config/presets.yaml
 ```
+
+`generate` also accepts `--owner NAME` (repeatable), `--include-excluded-owners`, `--mask-pii`, `--force-refresh`, and `--out PATH`. Any command accepts `--debug` (before the subcommand) to show a full traceback instead of a one-line error.
 
 ### 11.3 Web app
 
@@ -444,7 +450,7 @@ The web page is organised like this:
 | 3. Filtering Engine | Done | funnellens/filters.py: Rule dataclass (validates field against every normalize.py column, and op against README §8.2's 13 operators), apply_filters (AND across rules, `in`/`not_in` give OR within a field, case-insensitive/trimmed text, is_empty/not_empty treat "", NaN, None, "nan", "none", "(Blank)" as empty, gt/gte/lt/lte/between coerce to numeric or datetime and never crash on bad data), apply_to_dataset (per-Dataset-frame filtering, skips a rule where the frame lacks that field, excluded-owners rule on by default via include_excluded_owners), parse_filter_string, load_presets/get_preset (config/presets.yaml, validated), available_values. 31 new tests (70 total) pass. Verified against real Phase 2 data: filtering leads_created by source correctly narrowed 88 rows to 18. |
 | 4. Report Builders | Done | funnellens/reports/{__init__,_shared,lead_funnel,stage_wise,source_wise,course_wise,reports_tab,final_count,source_enrolment,raw}.py + funnellens/checks.py built per LOGIC_SPEC.md section 3 exactly. Registry of 8 keys, every builder is build(dataset, from_date, to_date, context) -> ReportResult (DataFrame + an `is_total` column marking Total rows). Days newest-first with a Total row per day block; Monthly/Yesterday columns are pandas SUMIFS-equivalents over whatever calendar days are present in `dataset` (caller must pull enough history -- documented in _shared.py). Stage Wise carries a "Stage as of <run date>" label (Phase 9 hook not yet wired). checks.py implements all 6 Phase 4 consistency checks. 30 new tests (100 total) pass on a hand-built fixture with known-correct answers. Verified against real Phase 2 data (2026-09-15): all 8 reports build without error; checks.py caught a real issue -- see Open issues. |
 | 5. Excel Export | Done | funnellens/export.py: write_workbook(results, run_info, path=None) -> bytes, always saving to `path` (or the default `output/FunnelLens_<from>_to_<to>.xlsx`, from run_info's from_date/to_date). One sheet per selected report (given order) + Raw Data (pulled out of `results` by key=="raw") + Run Info (caller's run_info dict, plus stage-basis labels and checks.py's issue count computed here) + an Issues sheet only when checks.py finds any. Bold/frozen headers, bold Total rows with a light fill, `0.00"%"` format for %% columns (values are already 0-100, so the built-in `0.00%` format would double-scale them), integer format for counts, auto-sized columns. 12 new tests (112 total) pass. Real-data sample generated at output/FunnelLens_2026-09-15_to_2026-09-15.xlsx. |
-| 6. Command-Line Interface | Not started | |
+| 6. Command-Line Interface | Done | funnellens/pipeline.py: run_pipeline(options, progress_callback) -> (bytes, run_info), the shared fetch_dataset -> normalize -> filter -> build reports -> checks -> write_workbook pipeline (raises PipelineError for an unknown report key or a reversed date range; always includes the "raw" report so Raw Data appears even if not selected; run_info carries output_path, api_calls, row_counts and the checks.py issue list). cli.py: test-connection, pull, generate (--reports/--from/--to/--owner/--filter/--preset/--include-excluded-owners/--mask-pii/--force-refresh/--out), verify/snapshot stubs, list-reports, list-presets. Error handling is centralized once in main() (SettingsError/LSQError/PipelineError/FilterError/ValueError -> a one-line message and exit 1; --debug re-raises). 17 new tests (129 total) pass. Real run: `python cli.py generate --reports all --from 2026-09-15 --to 2026-09-15` wrote a 10-sheet workbook and correctly surfaced the Overdues_Total==500 issue from Phase 4 on stdout. |
 | 7. Streamlit Web App | Not started | |
 | 8. Verification Against Google Sheet | Not started | |
 | 9. Stage Snapshots, Deployment and Handover | Not started | |
