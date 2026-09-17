@@ -10,6 +10,9 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
+import time
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Any, Callable
@@ -43,6 +46,11 @@ class RecordLimitError(LSQError):
 
 
 class LSQClient:
+    # LeadSquared enforces 20 calls per 5s account-wide; stay a little under it so
+    # parallel workers don't all retry into the same window and never clear it.
+    _RATE_LIMIT_CALLS = 18
+    _RATE_LIMIT_WINDOW = 5.0
+
     def __init__(self, settings: Settings, session: requests.Session | None = None):
         self._settings = settings
         self._session = session or requests.Session()
@@ -54,6 +62,22 @@ class LSQClient:
         self._opp_page_size = settings.api["opportunity_search_page_size"]
         self._max_records = settings.api["max_records"]
         self._max_opp_records = settings.api["max_opportunity_search_records"]
+        self.call_count = 0
+        self._rate_lock = threading.Lock()
+        self._call_times: deque[float] = deque()
+
+    def _throttle(self) -> None:
+        """Blocks until fewer than _RATE_LIMIT_CALLS calls have been made in the trailing window,
+        shared across every thread using this client -- caps real request rate, not just retries."""
+        with self._rate_lock:
+            while True:
+                now = time.monotonic()
+                while self._call_times and now - self._call_times[0] > self._RATE_LIMIT_WINDOW:
+                    self._call_times.popleft()
+                if len(self._call_times) < self._RATE_LIMIT_CALLS:
+                    self._call_times.append(now)
+                    return
+                time.sleep(self._RATE_LIMIT_WINDOW - (now - self._call_times[0]))
 
     # ------------------------------------------------------------------
     # Low-level request plumbing
@@ -70,6 +94,8 @@ class LSQClient:
         """Single HTTP attempt. Raises LSQTransientError on 429/5xx (retried by _request_with_retry)."""
         url = f"{self._base_url}{path}"
         all_params = {**self._auth_params(), **(params or {})}
+        self._throttle()
+        self.call_count += 1
         try:
             response = self._session.request(
                 method, url, params=all_params, json=json_body, timeout=timeout,

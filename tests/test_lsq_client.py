@@ -1,3 +1,4 @@
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -134,3 +135,22 @@ def test_run_parallel_preserves_input_order():
     client = LSQClient(make_settings(max_workers=3))
     calls = [lambda i=i: i for i in range(10)]
     assert client.run_parallel(calls) == list(range(10))
+
+
+def test_throttle_delays_once_the_window_is_full():
+    client = LSQClient(make_settings())
+    client._RATE_LIMIT_CALLS = 2
+    client._RATE_LIMIT_WINDOW = 0.2
+    start = time.monotonic()
+    for _ in range(3):
+        client._throttle()
+    assert time.monotonic() - start >= 0.2
+
+
+def test_throttle_does_not_delay_under_the_limit():
+    client = LSQClient(make_settings())
+    client._RATE_LIMIT_CALLS = 100
+    start = time.monotonic()
+    for _ in range(5):
+        client._throttle()
+    assert time.monotonic() - start < 0.1

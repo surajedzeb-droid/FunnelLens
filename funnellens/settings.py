@@ -58,6 +58,18 @@ class Settings:
         return self.config["fields"]
 
     @property
+    def stages(self) -> list[str]:
+        return self.config["stages"]
+
+    @property
+    def excluded_owner_roles(self) -> list[str]:
+        return self.config["excluded_owner_roles"]
+
+    @property
+    def excluded_owner_names(self) -> list[str]:
+        return self.config["excluded_owner_names"]
+
+    @property
     def opportunity_event_code(self) -> int:
         return self.config["opportunity_event_code"]
 
