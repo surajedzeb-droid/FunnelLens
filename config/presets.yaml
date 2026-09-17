@@ -1,9 +1,10 @@
 presets: []
 
-# Example (uncomment and edit once the team confirms their most-used filters):
+# Example (uncomment and edit once the team confirms their most-used filters).
+# Field names are the normalized Dataset columns from normalize.py (see funnellens/filters.py).
 # presets:
 #   - name: "Team North - ACCA Hot Leads"
 #     rules:
-#       - {field: owner, op: in, value: ["Counselor A", "Counselor B"]}
+#       - {field: counselor_name, op: in, value: ["Counselor A", "Counselor B"]}
 #       - {field: course, op: in, value: ["ACCA"]}
-#       - {field: stage, op: equals, value: "Hot"}
+#       - {field: opportunity_stage, op: equals, value: "Hot"}
