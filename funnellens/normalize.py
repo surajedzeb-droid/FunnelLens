@@ -121,7 +121,7 @@ def normalize_opportunities(df: pd.DataFrame, settings: Settings) -> pd.DataFram
 def normalize_enrolments(df: pd.DataFrame, settings: Settings, roster: pd.DataFrame) -> pd.DataFrame:
     """Renames the Opportunity Advanced Search result and maps Owner GUID to counselor name
     (P_Source is unreliable -- see LOGIC_SPEC.md section 2 -- so Source is not resolved here)."""
-    columns = ["owner_id", "counselor_name", "lead_id", "opportunity_status", "opportunity_stage"]
+    columns = ["owner_id", "counselor_name", "lead_id", "opportunity_status", "opportunity_stage", "ist_date"]
     field_to_internal = {"Owner": "owner_id", "Status": "opportunity_status",
                           settings.fields["opportunity_stage"]: "opportunity_stage",
                           "RelatedProspectId": "lead_id"}

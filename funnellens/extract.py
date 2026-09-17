@@ -57,8 +57,16 @@ def _fetch_leads_window(entity: str, day: date, start, end, include_csv: str, fo
 
 
 def _fetch_enrolments_window(client: LSQClient, day: date, start, end, force_refresh: bool) -> pd.DataFrame:
-    return _cached("enrolments", day, force_refresh,
-                    lambda: pd.DataFrame(client.search_opportunities_by_enrolled_date(start, end)))
+    def compute() -> pd.DataFrame:
+        # The API returns no enrolled-date field per record (it's only the search's own
+        # filter parameter) -- tag each day's window explicitly, or Reports/Final Count/
+        # Source Wise Enrolment can't attribute an enrolment to a day or month at all.
+        df = pd.DataFrame(client.search_opportunities_by_enrolled_date(start, end))
+        if not df.empty:
+            df["ist_date"] = day
+        return df
+
+    return _cached("enrolments", day, force_refresh, compute)
 
 
 def _fetch_opportunities_for_day(client: LSQClient, day: date, lead_ids: list[str], force_refresh: bool) -> pd.DataFrame:
